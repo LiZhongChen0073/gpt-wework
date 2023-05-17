@@ -16,7 +16,7 @@ func main() {
 	r := gin.Default()
 	r.GET("/ping", Ping)
 	r.GET("/wechat/check", service.CheckWeixinSign)
-	r.POST("/wechat/check", service.TalkWeixin)
+	r.POST("/wechat/check", service.TalkWeiXin)
 	r.POST("/chat", service.Chat)
 	r.Run(":8888")
 }

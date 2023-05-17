@@ -12,13 +12,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type WeixinUserAskMsg struct {
-	ToUserName string `xml:"ToUserName"`
-	CreateTime int64  `xml:"CreateTime"`
-	MsgType    string `xml:"MsgType"`
-	Event      string `xml:"Event"`
-	Token      string `xml:"Token"`
-	OpenKfId   string `xml:"OpenKfId"`
+type CorpWxXmlReceiveMsg struct {
+	ToUserName   CDATA `xml:"ToUserName"`
+	FromUserName CDATA `xml:"FromUserName"`
+	CreateTime   int64 `xml:"CreateTime"`
+	MsgType      CDATA `xml:"MsgType"`
+	Content      CDATA `xml:"Content"`
+	MsgId        int64 `xml:"MsgId"`
+	AgentID      int64 `xml:"AgentID"`
 }
 
 type AccessToken struct {
@@ -63,38 +64,25 @@ type ReplyMsg struct {
 	} `json:"text,omitempty"`
 }
 
-func TalkWeixin(c *gin.Context) {
-	token := token
+func TalkWeiXin(c *gin.Context) {
 	receiverId := corpid
-	encodingAeskey := encodingAesKey
 	verifyMsgSign := c.Query("msg_signature")
 	verifyTimestamp := c.Query("timestamp")
 	verifyNonce := c.Query("nonce")
-	crypt := NewWXBizMsgCrypt(token, encodingAeskey, receiverId, 1)
 	bodyBytes, _ := ioutil.ReadAll(c.Request.Body)
+	crypt := NewWXBizMsgCrypt(token, encodingAesKey, receiverId, XmlType)
 	data, _ := crypt.DecryptMsg(verifyMsgSign, verifyTimestamp, verifyNonce, bodyBytes)
-	var weixinUserAskMsg WeixinUserAskMsg
-	err := xml.Unmarshal([]byte(string(data)), &weixinUserAskMsg)
+	var receiveMsg CorpWxXmlReceiveMsg
+	err := xml.Unmarshal(data, &receiveMsg)
 	if err != nil {
 		fmt.Println("err:  " + err.Error())
 	}
-	accessToken, err := accessToken()
-	if err != nil {
-		c.JSON(500, "ok")
-		return
+	fmt.Println("receiveMsg.Content: ", receiveMsg.Content.Value)
+	if receiveMsg.MsgType.Value == "text" {
+
+		go orderMeeting(receiveMsg.FromUserName.Value, receiveMsg.Content.Value)
 	}
-	msgToken := weixinUserAskMsg.Token
-	msgRet, err := getMsgs(accessToken, msgToken)
-	if err != nil {
-		c.JSON(500, "ok")
-		return
-	}
-	if isRetry(verifyMsgSign) {
-		c.JSON(200, "ok")
-		return
-	}
-	go handleMsgRet(msgRet)
-	c.JSON(200, "ok")
+	c.JSON(200, "success")
 }
 
 func TalkToUser(external_userid, open_kfid, ask, content string) {
@@ -106,78 +94,79 @@ func TalkToUser(external_userid, open_kfid, ask, content string) {
 			Content string `json:"content,omitempty"`
 		}{Content: content},
 	}
-	atoken, err := accessToken()
+
+	callTalk(reply, accessToken())
+}
+
+type UserMeeting struct {
+	Num       int      `json:"number"`
+	Duration  int64    `json:"duration"`
+	StartTime string   `json:"start_time"`
+	Attendees []string `json:"people"`
+}
+
+func orderMeeting(userid, message string) {
+	// 1. 发送给gpt要求获取到格式化的消息
+	complete, err := OpenAiComplete(message)
+	if err != nil {
+		fmt.Println("GPT err: ", err.Error())
+	}
+	fmt.Println("complete: ", complete)
+	//complete := `{"num": 2, "duration": 2, "start_time": "2023-05-12 15:00:00", "people": ["sunmingjian", "tanchanghao"]}`
+	// 用户对会议室的要求
+	meeting := UserMeeting{}
+	if err := json.Unmarshal([]byte(complete), &meeting); err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+	// 2. 查询当前的会议室列表
+	meetingRoomList, err := ListMeetingRoom()
+	if err != nil {
+		fmt.Println("ListMeetingRoom err: ", err.Error())
+	}
+	loc, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
 		return
 	}
-	callTalk(reply, atoken)
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", meeting.StartTime, loc)
+	attendEmails := make([]string, 0)
+	for _, attendee := range meeting.Attendees {
+		attendEmails = append(attendEmails, attendee+"@pidan999.onexmail.com")
+	}
+	marshal, _ := json.Marshal(meetingRoomList)
+	fmt.Println("meetingRoomList: ", string(marshal))
+	personNumOkList := make([]int, 0)
+	for _, r := range meetingRoomList {
+		if r.Capacity >= meeting.Num {
+			personNumOkList = append(personNumOkList, r.MeetingRoomId)
+		}
+	}
+	// 在指定时间内没有被预定过的会议室ID
+	timeOkNum := getUnbookedMeetingRoom(t.Unix(), t.Add(time.Duration(meeting.Duration)*time.Hour).Unix())
+	fmt.Println("timeOkNum: ", timeOkNum)
+	doubleOk := intersection(personNumOkList, timeOkNum)
+	fmt.Println("personNumOkList: ", personNumOkList)
+	fmt.Println("doubleOk: ", doubleOk)
+	success := false
+	for _, meetingRoomId := range doubleOk {
+		if err = tryOrderMeetingRoom(meetingRoomId, t.Unix(), t.Add(time.Duration(meeting.Duration)*time.Hour).Unix(), attendEmails, userid); err == nil {
+			success = true
+			fmt.Println("预定成功")
+			break
+		}
+		continue
+	}
+	if !success {
+		fmt.Println("预定失败")
+	}
+	//TalkToUser(userId, kfId, content, ret)
 }
 
-func handleMsgRet(msgRet MsgRet) {
-	fmt.Println(msgRet)
-	size := len(msgRet.MsgList)
-	if size < 1 {
-		return
-	}
-	current := msgRet.MsgList[size-1]
-	userId := current.ExternalUserid
-	kfId := current.OpenKfid
-	content := current.Text.Content
-	if content == "" {
-		return
-	}
-	ret, err := AskOnConversation(content, userId, weworkConversationSize)
-	if err != nil {
-		TalkToUser(userId, kfId, content, "服务器火爆")
-		return
-	}
-	TalkToUser(userId, kfId, content, ret)
-}
-
-func isRetry(signature string) bool {
-	var base = "retry:signature:%s"
-	key := fmt.Sprintf(base, signature)
-	_, found := retryCache.Get(key)
-	if found {
-		return true
-	}
-	retryCache.Set(key, "1", 1*time.Minute)
-	return false
-}
-
-func getMsgs(accessToken, msgToken string) (MsgRet, error) {
-	var msgRet MsgRet
-	url := "https://qyapi.weixin.qq.com/cgi-bin/kf/sync_msg?access_token=" + accessToken
-	method := "POST"
-	payload := strings.NewReader(fmt.Sprintf(`{"token" : "%s"}`, msgToken))
-	client := &http.Client{}
-	req, err := http.NewRequest(method, url, payload)
-	if err != nil {
-		fmt.Println(err)
-		return msgRet, err
-	}
-	req.Header.Add("Content-Type", "application/json")
-
-	res, err := client.Do(req)
-	if err != nil {
-		return msgRet, err
-	}
-	defer res.Body.Close()
-
-	body, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		fmt.Println(err)
-		return msgRet, err
-	}
-	json.Unmarshal([]byte(string(body)), &msgRet)
-	return msgRet, nil
-}
-
-func accessToken() (string, error) {
+func accessToken() string {
 	var tokenCacheKey = "tokenCache"
 	data, found := tokenCache.Get(tokenCacheKey)
 	if found {
-		return fmt.Sprintf("%v", data), nil
+		return fmt.Sprintf("%v", data)
 	}
 	urlBase := "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=%s&corpsecret=%s"
 	url := fmt.Sprintf(urlBase, corpid, corpsecret)
@@ -186,33 +175,35 @@ func accessToken() (string, error) {
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		fmt.Println(err)
-		return "", err
+		return ""
 	}
 	res, err := client.Do(req)
 	if err != nil {
 		fmt.Println(err)
-		return "", err
+		return ""
 	}
 	defer res.Body.Close()
 
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		fmt.Println(err)
-		return "", err
+		return ""
 	}
 	s := string(body)
 	var accessToken AccessToken
 	json.Unmarshal([]byte(s), &accessToken)
-	token := accessToken.AccessToken
-	tokenCache.Set(tokenCacheKey, token, 5*time.Minute)
-	return token, nil
+	t := accessToken.AccessToken
+	tokenCache.Set(tokenCacheKey, t, 5*time.Minute)
+	return t
 }
 
 func CheckWeixinSign(c *gin.Context) {
-	token := token
-	receiverId := corpid
-	encodingAeskey := encodingAesKey
-	wxcpt := NewWXBizMsgCrypt(token, encodingAeskey, receiverId, 1)
+	//token := token
+	//receiverId :=
+	//encodingAeskey := encodingAesKey
+
+	fmt.Println(token, encodingAesKey, corpid)
+	wxcpt := NewWXBizMsgCrypt(token, encodingAesKey, corpid, 1)
 	/*
 	   	------------使用示例一：验证回调URL---------------
 	   	*企业开启回调模式时，企业微信会向验证url发送一个get请求
@@ -275,4 +266,20 @@ func callTalk(reply ReplyMsg, accessToken string) error {
 	s := string(body)
 	fmt.Println(s)
 	return nil
+}
+
+func intersection(arr1, arr2 []int) []int {
+	// 使用map记录第一个数组中出现的元素
+	map1 := make(map[int]bool)
+	for _, v := range arr1 {
+		map1[v] = true
+	}
+	// 遍历第二个数组，如果元素在map中出现过，则为交集
+	var res []int
+	for _, v := range arr2 {
+		if map1[v] {
+			res = append(res, v)
+		}
+	}
+	return res
 }
