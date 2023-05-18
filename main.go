@@ -13,11 +13,12 @@ func main() {
 	if err != nil {
 		panic("Error loading .env file")
 	}
+	service.InitConfig()
+
 	r := gin.Default()
 	r.GET("/ping", Ping)
-	r.GET("/wechat/check", service.CheckWeixinSign)
+	r.GET("/wechat/check", service.CheckWeiXinSign)
 	r.POST("/wechat/check", service.TalkWeiXin)
-	r.POST("/chat", service.Chat)
 	r.Run(":8888")
 }
 

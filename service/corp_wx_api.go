@@ -211,39 +211,51 @@ func tryOrderMeetingRoom(meetingRoomId int, startTime int64, endTime int64, emai
 func getUserId(emails []string) []string {
 	userIds := make([]string, 0)
 	for _, email := range emails {
-		// 初始化请求体
-		data := map[string]interface{}{
-			"email":      email,
-			"email_type": 1,
+		uid := getUserIdByEmail(email)
+		if uid == "" {
+			fmt.Println("getUserIdByEmail occur error, email: ", email)
+			continue
 		}
-		requestBody, err := json.Marshal(data)
-		if err != nil {
-			log.Fatal(err)
-		}
-		url := "https://qyapi.weixin.qq.com/cgi-bin/user/get_userid_by_email?access_token=%s"
-		// 发送HTTP请求
-		req, err := http.NewRequest("POST", fmt.Sprintf(url, accessToken()), bytes.NewBuffer(requestBody))
-		if err != nil {
-			log.Fatal(err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		client := &http.Client{}
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		// 处理响应
-		var result map[string]interface{}
-		err = json.NewDecoder(resp.Body).Decode(&result)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if s, ok := result["userid"].(string); ok {
-			userIds = append(userIds, s)
-		}
+		userIds = append(userIds, uid)
 	}
 	return userIds
+}
+
+func getUserIdByEmail(email string) string {
+	// 初始化请求体
+	data := map[string]interface{}{
+		"email":      email,
+		"email_type": 1,
+	}
+	requestBody, err := json.Marshal(data)
+	if err != nil {
+		log.Fatal(err)
+	}
+	url := "https://qyapi.weixin.qq.com/cgi-bin/user/get_userid_by_email?access_token=%s"
+	// 发送HTTP请求
+	req, err := http.NewRequest("POST", fmt.Sprintf(url, accessToken()), bytes.NewBuffer(requestBody))
+	if err != nil {
+		log.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func(Body io.ReadCloser) {
+		err = Body.Close()
+	}(resp.Body)
+
+	// 处理响应
+	var result map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if s, ok := result["userid"].(string); ok {
+		return s
+	}
+	return ""
 }
