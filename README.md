@@ -29,7 +29,6 @@
 GET    /ping                     服务健康检查
 GET    /wechat/check             企业微信服务器验证地址，在企业微信后台配置 域名+/wechat/check
 POST   /wechat/check             企业微信服务器事件推送地址地址
-POST   /chat                     OpenAI 聊天接口，用于测试
 ```
 
 *配置文件*
@@ -50,11 +49,10 @@ OPENAI_KEY=key
 ```
 
 #### 1.登陆（注册）你的 OpenAI 账号，拿到对应的 key
-参数会用到 [gpt.go](./service/gpt.go) 当中
+参数会用到 [gpt.go](./service/openai_api.go) 当中
 
 #### 2.注册并登陆企业微信后台
-应用管理 - 微信客服
-![](https://raw.githubusercontent.com/razertory/statics/main/staic/2.png)
+应用管理 - 自建应用
 
 #### 3.配置应用服务器
 host + `/wechat/check`
@@ -63,16 +61,11 @@ host + `/wechat/check`
 ![](https://raw.githubusercontent.com/razertory/statics/main/staic/4.png)
 ![](https://raw.githubusercontent.com/razertory/statics/main/staic/5.png)
 
-#### 4.配置机器人
-让客服机器人被API接管
-![](https://raw.githubusercontent.com/razertory/statics/main/staic/6.png)
-
 
 ## 其它
 1. 由于 OpenAI 对大陆 ip 的限制，阁下所用的服务器推荐在大陆以外，或者给服务器套代理
 2. 企业微信如果没有做企业备案，那么最多服务100人，这意味着阁下需要「拓展业务」，需要想办法做备案
 3. 只针对备案后的企业微信：配置的事件接受服务器，需要和企业微信备案的主体一致。
-4. 其它问题or商务合作：可以在公众号点击「加我微信」
 
 
 
